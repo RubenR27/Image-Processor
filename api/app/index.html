@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>image-processor-k8s</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Background grid -->
+  <div class="bg-grid"></div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo-mark">
+        <span class="logo-bracket">[</span>
+        <span class="logo-icon">⬡</span>
+        <span class="logo-bracket">]</span>
+      </div>
+      <div class="logo-text">
+        <span class="logo-title">IMAGE<span class="accent">·</span>PROCESSOR</span>
+        <span class="logo-sub">k8s cluster / distributed pipeline</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="cluster-status">
+        <div class="status-dot" id="clusterDot"></div>
+        <span id="clusterLabel">CONNECTING...</span>
+      </div>
+      <div class="header-metrics">
+        <div class="metric-chip">
+          <span class="metric-label">WORKERS</span>
+          <span class="metric-val" id="workerCount">—</span>
+        </div>
+        <div class="metric-chip">
+          <span class="metric-label">QUEUE</span>
+          <span class="metric-val" id="queueCount">—</span>
+        </div>
+        <div class="metric-chip">
+          <span class="metric-label">JOBS</span>
+          <span class="metric-val" id="jobCount">0</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main layout -->
+  <main class="main">
+
+    <!-- Left panel: upload + options -->
+    <section class="panel panel-upload">
+
+      <div class="panel-label">
+        <span class="panel-num">01</span>
+        <span>UPLOAD &amp; CONFIGURE</span>
+      </div>
+
+      <!-- Drop zone -->
+      <div class="dropzone" id="dropzone">
+        <div class="drop-inner" id="dropInner">
+          <div class="drop-icon">
+            <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="8" y="16" width="48" height="36" rx="2" stroke="currentColor" stroke-width="2"/>
+              <circle cx="22" cy="28" r="4" stroke="currentColor" stroke-width="2"/>
+              <path d="M8 40 L20 30 L30 38 L42 26 L56 38" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M32 8 L32 28 M26 14 L32 8 L38 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <p class="drop-title">DROP IMAGE HERE</p>
+          <p class="drop-sub">or <label for="fileInput" class="file-link">browse files</label></p>
+          <p class="drop-formats">PNG · JPG · WEBP · GIF · BMP</p>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" hidden />
+
+        <!-- Preview overlay -->
+        <div class="drop-preview" id="dropPreview">
+          <img id="previewImg" src="" alt="preview" />
+          <div class="preview-info">
+            <span id="previewName">—</span>
+            <span id="previewSize">—</span>
+          </div>
+          <button class="preview-clear" id="previewClear" title="Remove">✕</button>
+        </div>
+      </div>
+
+      <!-- Transform options -->
+      <div class="options-block">
+        <p class="options-title">TRANSFORM</p>
+        <div class="options-grid">
+          <label class="option-card">
+            <input type="checkbox" name="transform" value="watermark" checked />
+            <div class="option-inner">
+              <span class="option-icon">🔏</span>
+              <span>Watermark</span>
+            </div>
+          </label>
+          <label class="option-card">
+            <input type="checkbox" name="transform" value="grayscale" />
+            <div class="option-inner">
+              <span class="option-icon">◑</span>
+              <span>Grayscale</span>
+            </div>
+          </label>
+          <label class="option-card">
+            <input type="checkbox" name="transform" value="resize" />
+            <div class="option-inner">
+              <span class="option-icon">⤢</span>
+              <span>Resize</span>
+            </div>
+          </label>
+          <label class="option-card">
+            <input type="checkbox" name="transform" value="blur" />
+            <div class="option-inner">
+              <span class="option-icon">≋</span>
+              <span>Blur</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Watermark text -->
+      <div class="input-group" id="watermarkGroup">
+        <label class="input-label" for="watermarkText">WATERMARK TEXT</label>
+        <input class="text-input" type="text" id="watermarkText" value="© image-processor-k8s" maxlength="60" />
+      </div>
+
+      <!-- Priority -->
+      <div class="input-group">
+        <label class="input-label">PRIORITY</label>
+        <div class="seg-control">
+          <button class="seg-btn" data-val="low">LOW</button>
+          <button class="seg-btn active" data-val="normal">NORMAL</button>
+          <button class="seg-btn" data-val="high">HIGH</button>
+        </div>
+      </div>
+
+      <!-- Submit -->
+      <button class="submit-btn" id="submitBtn" disabled>
+        <span class="submit-label">ENQUEUE JOB</span>
+        <span class="submit-arrow">→</span>
+      </button>
+
+    </section>
+
+    <!-- Right panel: job queue -->
+    <section class="panel panel-queue">
+
+      <div class="panel-label">
+        <span class="panel-num">02</span>
+        <span>JOB QUEUE</span>
+        <button class="clear-btn" id="clearBtn">CLEAR ALL</button>
+      </div>
+
+      <div class="queue-list" id="queueList">
+        <div class="queue-empty" id="queueEmpty">
+          <div class="empty-icon">⬡</div>
+          <p>No jobs enqueued yet.</p>
+          <p>Upload an image to get started.</p>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- HPA meter bar -->
+  <div class="hpa-bar">
+    <div class="hpa-label">
+      <span class="mono">HPA</span>
+      <span>HorizontalPodAutoscaler — worker replicas</span>
+    </div>
+    <div class="hpa-replicas" id="hpaReplicas">
+      <!-- dots injected by JS -->
+    </div>
+    <div class="hpa-cpu">
+      <span class="hpa-cpu-label mono">CPU AVG</span>
+      <div class="hpa-cpu-bar">
+        <div class="hpa-cpu-fill" id="cpuFill"></div>
+      </div>
+      <span class="hpa-cpu-val" id="cpuVal">—%</span>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Job detail modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="modal">
+      <button class="modal-close" id="modalClose">✕</button>
+      <div class="modal-header">
+        <span class="modal-label">JOB DETAIL</span>
+        <span class="modal-id" id="modalId">—</span>
+      </div>
+      <div class="modal-body">
+        <div class="modal-images" id="modalImages"></div>
+        <div class="modal-meta" id="modalMeta"></div>
+        <div class="modal-log" id="modalLog"></div>
+      </div>
+      <div class="modal-actions" id="modalActions"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
