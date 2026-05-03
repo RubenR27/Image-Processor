@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-deployment
+  namespace: image-processor
+spec:
+  selector:
+    matchLabels:
+      app: image-worker
+  template:
+    metadata:
+      labels:
+        app: image-worker
+    spec:
+      containers:
+      - name: worker
+        image: rupolaso/worker-img-processor-image:v2
+        env:
+        - name: CELERY_BROKER
+          value: "redis://redis-service:6379/0"
+        - name: CELERY_BACKEND
+          value: "redis://redis-service:6379/0"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+        volumeMounts:
+        - name: storage
+          mountPath: /app/uploads
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: image-pvc

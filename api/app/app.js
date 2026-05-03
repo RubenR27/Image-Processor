@@ -1,27 +1,25 @@
 /**
  * image-processor-k8s — app.js
  *
- * All API calls target:
- *   POST   /upload            → { job_id, status }
- *   GET    /result/{job_id}   → { status, result_url?, error? }
- *   GET    /files/{filename}  → binary image
- *   GET    /healthz           → { status: "ok", workers, queue }
- *
- * Change BASE_URL to point to your actual cluster ingress.
+ * API endpoints (FastAPI):
+ *   POST   /upload           → { job_id, status }
+ *   GET    /status/{job_id}  → { status, result }
+ *   GET    /files/{filename} → binary image
+ *   GET    /                 → used as health ping
  */
 
-const BASE_URL = 'http://image-processor.local'; // ← change if needed
+const BASE_URL = ''; // vacío = mismo origen que FastAPI sirve
 
 /* ============================================================
    STATE
 ============================================================ */
 const state = {
-  file:     null,
-  priority: 'normal',
-  jobs:     [],          // [{ id, name, size, thumb, transforms, priority, status, progress, logs, createdAt, resultUrl }]
-  polling:  {},          // { [job_id]: intervalId }
-  mockWorkers: 1,
-  mockCpu:     0,
+  file:        null,
+  priority:    'normal',
+  jobs:        [],
+  polling:     {},
+  workerCount: 1,
+  cpuLoad:     0,
 };
 
 /* ============================================================
@@ -29,41 +27,40 @@ const state = {
 ============================================================ */
 const $ = id => document.getElementById(id);
 
-const dropzone     = $('dropzone');
-const dropInner    = $('dropInner');
-const dropPreview  = $('dropPreview');
-const previewImg   = $('previewImg');
-const previewName  = $('previewName');
-const previewSize  = $('previewSize');
-const previewClear = $('previewClear');
-const fileInput    = $('fileInput');
-const submitBtn    = $('submitBtn');
-const queueList    = $('queueList');
-const queueEmpty   = $('queueEmpty');
-const clearBtn     = $('clearBtn');
-const clusterDot   = $('clusterDot');
-const clusterLabel = $('clusterLabel');
-const workerCount  = $('workerCount');
-const queueCount   = $('queueCount');
-const jobCount     = $('jobCount');
-const hpaReplicas  = $('hpaReplicas');
-const cpuFill      = $('cpuFill');
-const cpuVal       = $('cpuVal');
+const dropzone       = $('dropzone');
+const dropPreview    = $('dropPreview');
+const previewImg     = $('previewImg');
+const previewName    = $('previewName');
+const previewSize    = $('previewSize');
+const previewClear   = $('previewClear');
+const fileInput      = $('fileInput');
+const submitBtn      = $('submitBtn');
+const queueList      = $('queueList');
+const queueEmpty     = $('queueEmpty');
+const clearBtn       = $('clearBtn');
+const clusterDot     = $('clusterDot');
+const clusterLabel   = $('clusterLabel');
+const workerCount    = $('workerCount');
+const queueCount     = $('queueCount');
+const jobCount       = $('jobCount');
+const hpaReplicas    = $('hpaReplicas');
+const cpuFill        = $('cpuFill');
+const cpuVal         = $('cpuVal');
 const toastContainer = $('toastContainer');
-const modalOverlay = $('modalOverlay');
-const modalClose   = $('modalClose');
-const modalId      = $('modalId');
-const modalImages  = $('modalImages');
-const modalMeta    = $('modalMeta');
-const modalLog     = $('modalLog');
-const modalActions = $('modalActions');
+const modalOverlay   = $('modalOverlay');
+const modalClose     = $('modalClose');
+const modalId        = $('modalId');
+const modalImages    = $('modalImages');
+const modalMeta      = $('modalMeta');
+const modalLog       = $('modalLog');
+const modalActions   = $('modalActions');
 
 /* ============================================================
    UTILS
 ============================================================ */
 function formatBytes(bytes) {
-  if (bytes < 1024)       return bytes + ' B';
-  if (bytes < 1048576)    return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024)    return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
@@ -187,92 +184,84 @@ submitBtn.addEventListener('click', async () => {
 });
 
 /* ============================================================
-   API CALLS
+   API CALLS — REAL (FastAPI)
 ============================================================ */
 
 /**
- * Real implementation — uncomment when your cluster is live.
- *
+ * POST /upload
+ * FastAPI guarda el fichero y encola la tarea Celery.
+ * Devuelve: { job_id: string, status: "processing" }
+ */
 async function uploadImage(file, transforms, priority) {
   const form = new FormData();
   form.append('file', file);
   form.append('transforms', transforms.join(','));
   form.append('priority', priority);
+
   const res = await fetch(`${BASE_URL}/upload`, { method: 'POST', body: form });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return data.job_id;
 }
 
-async function pollJob(jobId) {
-  const res = await fetch(`${BASE_URL}/result/${jobId}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json(); // { status, result_url?, error? }
-}
-
-async function fetchHealth() {
-  const res = await fetch(`${BASE_URL}/healthz`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json(); // { status, workers, queue }
-}
+/**
+ * GET /status/{job_id}
+ * Celery AsyncResult devuelve: { status: "PENDING"|"STARTED"|"SUCCESS"|"FAILURE", result: any }
+ * Lo normalizamos al formato que espera el resto del JS.
  */
-
-/* ---- MOCK API (remove when cluster is live) ---- */
-
-async function uploadImage(file, transforms, priority) {
-  await delay(600 + Math.random() * 400);
-  return crypto.randomUUID();
-}
-
 async function pollJob(jobId) {
-  const job = state.jobs.find(j => j.id === jobId);
-  if (!job) return { status: 'error', error: 'Not found' };
+  const res = await fetch(`${BASE_URL}/status/${jobId}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
 
-  const elapsed = Date.now() - job.createdAt;
-  const processingTime = 3000 + Math.random() * 4000;
+  const statusMap = {
+    'PENDING': 'queued',
+    'STARTED': 'processing',
+    'RETRY':   'processing',
+    'SUCCESS': 'done',
+    'FAILURE': 'error',
+  };
 
-  if (elapsed < 800)             return { status: 'queued' };
-  if (elapsed < processingTime)  return { status: 'processing', progress: Math.min(95, Math.round((elapsed - 800) / (processingTime - 800) * 100)) };
+  const normalized = statusMap[data.status] || 'queued';
 
-  // Simulate 8% error rate
-  if (!job._resolved) {
-    job._resolved = true;
-    job._success  = Math.random() > 0.08;
-  }
-
-  if (job._success) {
-    return { status: 'done', result_url: job.thumb }; // reuse thumb as mock result
-  } else {
-    return { status: 'error', error: 'Worker encountered an unexpected error.' };
-  }
+  return {
+    status:     normalized,
+    result_url: normalized === 'done'  ? `/files/${data.result}` : null,
+    error:      normalized === 'error' ? String(data.result)     : null,
+    progress:   normalized === 'processing' ? 50 : undefined,
+  };
 }
 
+/**
+ * Health ping: GET /
+ * Si responde 200 el servidor está vivo.
+ */
 async function fetchHealth() {
-  await delay(200);
-  return { status: 'ok', workers: state.mockWorkers, queue: state.jobs.filter(j => j.status === 'queued').length };
+  const res = await fetch(`${BASE_URL}/`);
+  if (!res.ok) throw new Error('Server unreachable');
+  return {
+    status:  'ok',
+    workers: state.workerCount,
+    queue:   state.jobs.filter(j => j.status === 'queued').length,
+  };
 }
-
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-/* ---- end mock ---- */
 
 /* ============================================================
    JOB MANAGEMENT
 ============================================================ */
 function addJob(jobId, transforms) {
   const job = {
-    id:         jobId,
-    name:       state.file.name,
-    size:       state.file.size,
-    thumb:      previewImg.src,
+    id:        jobId,
+    name:      state.file.name,
+    size:      state.file.size,
+    thumb:     previewImg.src,
     transforms,
-    priority:   state.priority,
-    status:     'queued',
-    progress:   0,
-    logs:       [{ t: Date.now(), msg: 'Job enqueued', type: '' }],
-    createdAt:  Date.now(),
-    resultUrl:  null,
-    _resolved:  false,
-    _success:   false,
+    priority:  state.priority,
+    status:    'queued',
+    progress:  0,
+    logs:      [{ t: Date.now(), msg: 'Job enqueued', type: '' }],
+    createdAt: Date.now(),
+    resultUrl: null,
   };
 
   state.jobs.unshift(job);
@@ -289,8 +278,7 @@ function removeJob(jobId) {
 }
 
 clearBtn.addEventListener('click', () => {
-  const ids = state.jobs.map(j => j.id);
-  ids.forEach(id => stopPolling(id));
+  state.jobs.forEach(j => stopPolling(j.id));
   state.jobs = [];
   renderQueue();
   updateMetrics();
@@ -310,8 +298,9 @@ function startPolling(job) {
     } catch (e) {
       updateJobStatus(job.id, 'error', 0);
       stopPolling(job.id);
+      toast(`Polling error for ${shortId(job.id)}: ${e.message}`, 'error');
     }
-  }, 1200);
+  }, 1500);
 }
 
 function stopPolling(jobId) {
@@ -328,12 +317,14 @@ function updateJobFromPoll(jobId, data) {
   if (data.status === 'queued') {
     job.status   = 'queued';
     job.progress = 0;
+
   } else if (data.status === 'processing') {
     job.status   = 'processing';
     job.progress = data.progress || 50;
     if (prev !== 'processing') {
       job.logs.push({ t: Date.now(), msg: 'Worker picked up job', type: 'proc' });
     }
+
   } else if (data.status === 'done') {
     job.status    = 'done';
     job.progress  = 100;
@@ -341,8 +332,9 @@ function updateJobFromPoll(jobId, data) {
     job.logs.push({ t: Date.now(), msg: 'Processing complete ✓', type: 'ok' });
     stopPolling(jobId);
     toast(`Job ${shortId(jobId)} completed`, 'success');
+
   } else if (data.status === 'error') {
-    job.status  = 'error';
+    job.status   = 'error';
     job.progress = 0;
     job.logs.push({ t: Date.now(), msg: 'Error: ' + (data.error || 'Unknown'), type: 'err' });
     stopPolling(jobId);
@@ -351,7 +343,7 @@ function updateJobFromPoll(jobId, data) {
 
   renderJobCard(job);
   updateMetrics();
-  simulateHpa();
+  updateHpa();
 }
 
 function updateJobStatus(jobId, status, progress) {
@@ -366,25 +358,20 @@ function updateJobStatus(jobId, status, progress) {
    RENDER
 ============================================================ */
 function renderQueue() {
-  // Remove all cards (keep empty placeholder)
   [...queueList.querySelectorAll('.job-card')].forEach(el => el.remove());
 
   if (state.jobs.length === 0) {
     queueEmpty.style.display = 'flex';
   } else {
     queueEmpty.style.display = 'none';
-    state.jobs.forEach(job => {
-      const card = buildJobCard(job);
-      queueList.appendChild(card);
-    });
+    state.jobs.forEach(job => queueList.appendChild(buildJobCard(job)));
   }
 }
 
 function renderJobCard(job) {
   const existing = queueList.querySelector(`[data-job-id="${job.id}"]`);
   if (!existing) return;
-  const fresh = buildJobCard(job);
-  existing.replaceWith(fresh);
+  existing.replaceWith(buildJobCard(job));
 }
 
 function buildJobCard(job) {
@@ -433,7 +420,6 @@ function buildJobCard(job) {
 function openModal(job) {
   modalId.textContent = job.id;
 
-  // Images
   modalImages.innerHTML = `
     <div class="modal-img-wrap">
       <span class="modal-img-label">ORIGINAL</span>
@@ -447,7 +433,6 @@ function openModal(job) {
     </div>
   `;
 
-  // Metadata
   modalMeta.innerHTML = `
     <div class="meta-item"><span class="meta-key">FILE</span><span class="meta-val">${job.name}</span></div>
     <div class="meta-item"><span class="meta-key">SIZE</span><span class="meta-val">${formatBytes(job.size)}</span></div>
@@ -457,7 +442,6 @@ function openModal(job) {
     <div class="meta-item"><span class="meta-key">JOB ID</span><span class="meta-val" style="font-size:0.6rem">${shortId(job.id)}</span></div>
   `;
 
-  // Log
   modalLog.innerHTML = job.logs
     .map(l => `<div class="log-line">
       <span class="log-time">${formatTime(l.t)}</span>
@@ -465,14 +449,13 @@ function openModal(job) {
     </div>`)
     .join('');
 
-  // Actions
   modalActions.innerHTML = '';
 
   if (job.status === 'done' && job.resultUrl) {
     const dl = document.createElement('a');
-    dl.href     = job.resultUrl;
-    dl.download = 'result_' + job.name;
-    dl.className = 'btn btn-primary';
+    dl.href        = job.resultUrl;
+    dl.download    = 'result_' + job.name;
+    dl.className   = 'btn btn-primary';
     dl.textContent = 'DOWNLOAD RESULT';
     modalActions.appendChild(dl);
   }
@@ -497,10 +480,7 @@ function openModal(job) {
 }
 
 modalClose.addEventListener('click', closeModal);
-
-modalOverlay.addEventListener('click', e => {
-  if (e.target === modalOverlay) closeModal();
-});
+modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeModal(); });
 
 function closeModal() {
   modalOverlay.classList.remove('open');
@@ -515,7 +495,6 @@ function toast(msg, type = 'info') {
   el.className = `toast ${type}`;
   el.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ'}</span><span class="toast-msg">${msg}</span>`;
   toastContainer.appendChild(el);
-
   setTimeout(() => {
     el.classList.add('fade-out');
     setTimeout(() => el.remove(), 350);
@@ -528,11 +507,10 @@ function toast(msg, type = 'info') {
 async function checkHealth() {
   try {
     const data = await fetchHealth();
-    clusterDot.className   = 'status-dot online';
+    clusterDot.className     = 'status-dot online';
     clusterLabel.textContent = 'CLUSTER ONLINE';
     workerCount.textContent  = data.workers ?? '—';
     queueCount.textContent   = data.queue   ?? '—';
-    state.mockWorkers = data.workers ?? 1;
   } catch {
     clusterDot.className     = 'status-dot offline';
     clusterLabel.textContent = 'CLUSTER OFFLINE';
@@ -542,29 +520,26 @@ async function checkHealth() {
 }
 
 function updateMetrics() {
-  jobCount.textContent = state.jobs.length;
+  jobCount.textContent   = state.jobs.length;
   queueCount.textContent = state.jobs.filter(j => j.status === 'queued').length;
 }
 
 /* ============================================================
-   HPA SIMULATION
+   HPA — driven by real job states
 ============================================================ */
-function simulateHpa() {
+function updateHpa() {
   const processing = state.jobs.filter(j => j.status === 'processing').length;
+  const queued     = state.jobs.filter(j => j.status === 'queued').length;
 
-  // Target workers = clamp between 1 and 10
-  const target = Math.max(1, Math.min(10, Math.ceil(processing / 2) + 1));
-  state.mockWorkers = target;
+  // Replica estimate: 1 worker per 2 active jobs, min 1, max 10
+  const replicas = Math.max(1, Math.min(10, Math.ceil((processing + queued) / 2)));
+  state.workerCount = replicas;
 
-  // CPU: simulate load proportional to processing jobs
-  const cpuTarget = processing > 0
-    ? Math.min(95, 20 + processing * 15 + Math.random() * 10)
-    : Math.max(5, Math.random() * 18);
+  // CPU estimate: proportional to processing jobs (visual only)
+  const cpuTarget = processing > 0 ? Math.min(95, 15 + processing * 20) : 5;
+  state.cpuLoad = state.cpuLoad + (cpuTarget - state.cpuLoad) * 0.4;
 
-  // Smooth approach
-  state.mockCpu = state.mockCpu + (cpuTarget - state.mockCpu) * 0.3;
-
-  renderHpa(target, state.mockCpu);
+  renderHpa(replicas, state.cpuLoad);
 }
 
 function renderHpa(replicas, cpu) {
@@ -575,9 +550,7 @@ function renderHpa(replicas, cpu) {
     const dot = document.createElement('div');
     dot.className = 'replica-dot';
     dot.dataset.num = i;
-    if (i <= replicas) {
-      dot.classList.add(cpu > 60 ? 'busy' : 'active');
-    }
+    if (i <= replicas) dot.classList.add(cpu > 60 ? 'busy' : 'active');
     hpaReplicas.appendChild(dot);
   }
 
@@ -587,10 +560,10 @@ function renderHpa(replicas, cpu) {
   hpaReplicas.appendChild(maxLabel);
 
   const pct = Math.round(cpu);
-  cpuFill.style.width = pct + '%';
+  cpuFill.style.width      = pct + '%';
   cpuFill.style.background = cpu > 80 ? 'var(--red)' : cpu > 60 ? 'var(--accent2)' : 'var(--accent4)';
-  cpuVal.textContent = pct + '%';
-  workerCount.textContent = replicas;
+  cpuVal.textContent        = pct + '%';
+  workerCount.textContent   = replicas;
 }
 
 /* ============================================================
@@ -599,6 +572,5 @@ function renderHpa(replicas, cpu) {
 (function init() {
   renderHpa(1, 0);
   checkHealth();
-  setInterval(checkHealth,   10000);
-  setInterval(simulateHpa,   2000);
+  setInterval(checkHealth, 10000);
 })();

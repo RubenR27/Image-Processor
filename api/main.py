@@ -15,6 +15,8 @@ app.mount("/static", StaticFiles(directory="app"), name="static")
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+RESULT_DIR = "results"
+
 @app.get("/")
 async def read_index():
     return FileResponse('app/index.html')
@@ -39,3 +41,10 @@ async def get_status(job_id: str):
 
     res = AsyncResult(job_id, app=celery_app)
     return {"status": res.status, "result": res.result}
+
+@app.get("/files/{filename}")
+async def get_file(filename: str):
+    path = os.path.join(RESULT_DIR, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path)
